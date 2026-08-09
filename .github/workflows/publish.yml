@@ -1,0 +1,57 @@
+name: publish
+on:
+  schedule:
+    - cron: '0 22 * * *'   # 매일 07:00 KST
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.11' }
+
+      - name: 주제 수집 (키 있을 때만)
+        if: ${{ secrets.NAVER_CLIENT_ID != '' }}
+        env:
+          NAVER_CLIENT_ID: ${{ secrets.NAVER_CLIENT_ID }}
+          NAVER_CLIENT_SECRET: ${{ secrets.NAVER_CLIENT_SECRET }}
+        run: python3 scripts/fetch_topics.py --out data/topics.json
+
+      - name: 사이트 빌드
+        run: python3 scripts/build.py --sku data/sku-data.json
+
+      - name: 변경 없으면 완전 no-op
+        run: |
+          git config user.name  "publish-bot"
+          git config user.email "publish-bot@users.noreply.github.com"
+          git add -A docs data
+          if git diff --cached --quiet; then
+            echo "변경 없음 — 커밋하지 않는다 (Last-Modified 보존)"
+            exit 0
+          fi
+          git commit -m "publish: $(date -u +%Y-%m-%d)"
+          git push
+
+      - name: IndexNow 통보
+        if: ${{ secrets.INDEXNOW_KEY != '' }}
+        env: { KEY: "${{ secrets.INDEXNOW_KEY }}" }
+        run: |
+          python3 - <<'PY'
+          import os, json, re, urllib.request
+          key = os.environ['KEY']
+          sm = open('docs/sitemap.xml').read()
+          urls = re.findall(r'<loc>(.*?)</loc>', sm)
+          host = urls[0].split('/')[2]
+          body = json.dumps({"host": host, "key": key, "urlList": urls[:100]}).encode()
+          req = urllib.request.Request("https://api.indexnow.org/indexnow", data=body,
+                                       headers={"Content-Type": "application/json"})
+          try:
+              print(urllib.request.urlopen(req, timeout=20).status)
+          except Exception as e:
+              print("indexnow 실패:", e)
+          PY
