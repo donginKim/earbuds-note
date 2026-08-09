@@ -23,7 +23,7 @@ jobs:
         run: python3 scripts/fetch_topics.py --out data/topics.json
 
       - name: 사이트 빌드
-        run: python3 scripts/build.py --sku data/sku-data.json
+        run: python3 scripts/build.py --sku data/sku-data.json --topics data/topics.json
 
       - name: 변경 없으면 완전 no-op
         run: |

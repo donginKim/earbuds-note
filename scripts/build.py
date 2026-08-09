@@ -109,8 +109,8 @@ def build_post(title, paras, stamp, fname):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('--sku', default='experiment-site/sku-data.json')
-    ap.add_argument('--topics', default='content-site/data/topics.json')
+    ap.add_argument('--sku', default='data/sku-data.json')
+    ap.add_argument('--topics', default='data/topics.json')
     ap.add_argument('--n-list', type=int, default=3)
     ap.add_argument('--n-post', type=int, default=3)
     ap.add_argument('--seed', type=int, default=None)
@@ -133,7 +133,11 @@ def main():
     # 리스티클 — 자체 가격 데이터 기반
     ANGLES = [('가성비', lambda x: x['lowest_price']),
               ('판매처가 많은 순', lambda x: -x.get('seller_count', 0)),
-              ('프리미엄', lambda x: -x['lowest_price'])]
+              ('프리미엄', lambda x: -x['lowest_price']),
+              ('10만원 아래', lambda x: (x['lowest_price'] > 100000, x['lowest_price'])),
+              ('20만원대', lambda x: abs(x['lowest_price'] - 250000)),
+              ('비교가 쉬운 순', lambda x: -(x.get('seller_count', 0) * (x['lowest_price'] < 200000)))]
+    rnd.shuffle(ANGLES)
     for i in range(min(a.n_list, len(ANGLES))):
         angle, key = ANGLES[i]
         pick = sorted(skus, key=key)[:10]
@@ -142,25 +146,73 @@ def main():
         t = f'{angle} 무선 이어폰 10선 ({stamp[:7].replace("-","년 ")}월 기준)'
         urls.append(build_listicle(t, pick, stamp, f'{slug(angle)}-earbuds-{stamp}.html'))
 
-    # 아티클 — 자체 작성 본문 (주제만 네이버 API에서)
-    pool = list(dict.fromkeys(topics)) or ['무선 이어폰', '노이즈캔슬링', '가성비 이어폰']
+    # 아티클 — 자체 작성 본문. 형태 5종을 랜덤 선택, 주제는 네이버 키워드
+    # 조각·일반명사 토큰 제거 — 주제로 쓸 수 없는 것들
+    BAD = {'추천','후기','정리','비교','장단점','순위','가격','최저가','있다면','프로','신제품',
+           '리뷰','사용기','총정리','모음','내돈내산','솔직','실사용','추천템','best','top',
+           '이어폰','블루투스','무선','제품','종류','기능','사용','구매','선택','차이','방법'}
+    def usable(t):
+        if t.lower() in BAD or len(t) < 2: return False
+        if any(t.endswith(x) for x in ('하는','다면','까지','부터','에서','보다','으로','이나')): return False
+        return True
+    def as_topic(t):
+        # 제품군 단어가 없으면 붙여서 자연스러운 주제로 만든다
+        return t if any(k in t for k in ('이어폰','버즈','헤드폰','이어버드')) else f'{t} 이어폰'
+    pool = [as_topic(t) for t in dict.fromkeys(topics) if usable(t)]
+    pool = pool or ['무선 이어폰', '노이즈캔슬링 이어폰', '가성비 이어폰']
     rnd.shuffle(pool)
-    for i in range(a.n_post):
+
+    def shape_criteria(kw):
+        return (f'{kw} 고를 때 실제로 보는 것', [
+            f'{kw}를 찾을 때 먼저 부딪히는 건 가격이 아니라 기준이다. 스펙표는 길지만 구매 결과를 바꾸는 항목은 몇 개 안 된다.',
+            '실사용 재생 시간이 첫 번째다. 표기 시간은 대개 노이즈캔슬링을 끈 조건이라 켜면 20~30% 줄어든다. 케이스 포함 총 시간과 본체 단독 시간을 나눠서 봐야 한다.',
+            '착용감이 두 번째다. 같은 이어팁 크기라도 노즐 각도에 따라 체감이 다르다. 반품 조건을 미리 확인해두는 게 스펙 비교보다 실질적이다.',
+            '가격 변동 폭이 세 번째다. 같은 모델이 판매처와 시점에 따라 수만 원씩 차이 난다. 카드 할인과 쿠폰까지 반영한 실결제가로 비교해야 한다.',
+            f'{kw} 선택은 스펙 순위가 아니라 사용 조건에 맞추는 문제다. 하루 사용 시간, 착용 환경, 예산 상한 세 가지를 먼저 정하면 후보가 크게 줄어든다.'])
+
+    def shape_mistakes(kw):
+        return (f'{kw} 살 때 자주 하는 실수', [
+            f'{kw}를 사고 나서 후회하는 이유는 대체로 비슷하다. 몇 가지는 사기 전에 걸러낼 수 있다.',
+            '첫째, 표기 재생 시간을 그대로 믿는 것. 조건이 다르면 실사용은 짧아진다.',
+            '둘째, 최저가만 보고 판매처를 확인하지 않는 것. 병행수입과 정품은 AS 조건이 다르다.',
+            '셋째, 이어팁을 기본 상태로만 쓰는 것. 팁만 바꿔도 차음과 저음이 달라진다.',
+            '넷째, 코덱 표기에 과하게 무게를 두는 것. 기기 조합이 맞지 않으면 무의미하다.',
+            f'정리하면 {kw}는 스펙보다 구매 조건과 사용 환경에서 갈린다.'])
+
+    def shape_price(kw):
+        return (f'{kw} 가격대별로 무엇이 달라지나', [
+            f'{kw}는 가격대마다 포기하는 항목이 다르다. 무엇을 버릴지 정하면 선택이 빨라진다.',
+            '5만 원 아래에서는 연결 안정성과 통화 품질이 먼저 흔들린다. 음질보다 이쪽이 체감된다.',
+            '5~15만 원 구간은 노이즈캔슬링이 들어오기 시작하는 지점이다. 다만 강도 차이가 크다.',
+            '15만 원 위로는 착용감과 앱 기능, 멀티포인트 같은 편의 기능이 갈린다.',
+            f'{kw}를 고를 때는 상한을 먼저 정하고 그 구간에서 무엇이 빠지는지 확인하는 순서가 낫다.'])
+
+    def shape_faq(kw):
+        return (f'{kw} 자주 묻는 것 정리', [
+            f'{kw}에 대해 반복해서 나오는 질문을 정리했다.',
+            '노이즈캔슬링을 켜면 배터리가 얼마나 줄어드나 — 제품마다 다르지만 대체로 20~30% 수준이다.',
+            '병행수입과 정품 차이는 — 가격은 싸지만 국내 AS가 제한되는 경우가 많다. 보증 조건을 먼저 확인해야 한다.',
+            '한쪽만 소리가 안 나면 — 대개 접점 오염이나 페어링 문제다. 초기화 후 재연결로 해결되는 경우가 많다.',
+            '이어팁은 바꿀 필요가 있나 — 차음이 부족하면 저음이 빠진다. 팁 교체가 가장 저렴한 개선이다.',
+            f'{kw} 관련 질문은 대부분 스펙이 아니라 사용 조건에서 나온다.'])
+
+    def shape_terms(kw):
+        return (f'{kw} 용어 정리', [
+            f'{kw} 설명에 반복해서 나오는 용어를 짧게 정리했다.',
+            'ANC는 액티브 노이즈 캔슬링이다. 마이크로 주변 소음을 측정해 반대 위상으로 상쇄한다. 저주파에 강하고 사람 목소리에는 약하다.',
+            '멀티포인트는 두 기기에 동시 연결하는 기능이다. 노트북과 휴대폰을 오갈 때 체감이 크다.',
+            '코덱은 무선으로 소리를 보내는 압축 방식이다. 송신 기기와 수신 기기가 같은 코덱을 지원해야 의미가 있다.',
+            'IPX 등급은 방수 정도다. 숫자가 클수록 강하고, 운동용이면 IPX4 이상이 무난하다.',
+            f'{kw}를 비교할 때 이 네 가지만 알아도 스펙표 대부분이 읽힌다.'])
+
+    SHAPES = [shape_criteria, shape_mistakes, shape_price, shape_faq, shape_terms]
+    n_post = a.n_post if a.n_post else rnd.randint(2, 5)
+    for i in range(n_post):
         kw = pool[i % len(pool)]
-        t = f'{kw} 고를 때 실제로 보는 것'
-        paras = [
-            f'{kw}를 찾는 사람이 가장 먼저 부딪히는 문제는 가격이 아니라 기준이다. '
-            '스펙표는 길지만 그중 구매 결과를 바꾸는 항목은 몇 개 되지 않는다.',
-            '첫째는 실사용 재생 시간이다. 표기 시간은 대개 노이즈캔슬링을 끈 조건이고, '
-            '켜면 20~30% 줄어드는 경우가 많다. 케이스 포함 총 시간과 본체 단독 시간을 구분해서 봐야 한다.',
-            '둘째는 착용감이다. 같은 이어팁 크기라도 노즐 각도에 따라 체감이 다르다. '
-            '반품 조건을 미리 확인해두는 편이 스펙 비교보다 실질적이다.',
-            '셋째는 가격 변동 폭이다. 같은 모델이 판매처와 시점에 따라 수만 원씩 차이 난다. '
-            '카드 할인과 쿠폰까지 반영한 실결제가를 기준으로 비교해야 한다.',
-            f'정리하면 {kw} 선택은 스펙 순위가 아니라 사용 조건에 맞추는 문제다. '
-            '하루 사용 시간, 착용 환경, 예산 상한 세 가지를 먼저 정하면 후보가 크게 줄어든다.',
-        ]
-        fn = f'{slug(kw)}-guide-{stamp}-{i+1}.html'
+        shape = SHAPES[rnd.randrange(len(SHAPES))]
+        t, paras = shape(kw)
+        rnd.shuffle(paras[1:-1])          # 본문 순서도 랜덤
+        fn = f'{slug(kw)}-{stamp}-{i+1}.html'
         urls.append(build_post(t, paras, stamp, fn))
 
     # 인덱스
