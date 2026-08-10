@@ -7,6 +7,7 @@
 산출: content-site/docs/  (GitHub Pages 루트로 그대로 배포)
 """
 import json, os, re, html, random, argparse, datetime as dt
+from urllib.parse import quote, urlsplit, urlunsplit
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SITE = os.path.join(ROOT, 'docs')
@@ -259,7 +260,11 @@ def main():
                 all_pages.append(f'{BASE}/{d}/{f}')
     sm = ['<?xml version="1.0" encoding="UTF-8"?>',
           '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">']
-    sm += [f'  <url><loc>{u}</loc><lastmod>{stamp}</lastmod></url>' for u in all_pages]
+    def _enc(u):
+        """사이트맵 규격: URL은 퍼센트 인코딩해야 한다(한글 경로 그대로 두면 구글이 못 가져옴)"""
+        p = urlsplit(u)
+        return urlunsplit((p.scheme, p.netloc, quote(p.path, safe='/-._~'), p.query, p.fragment))
+    sm += [f'  <url><loc>{_enc(u)}</loc><lastmod>{stamp}</lastmod></url>' for u in all_pages]
     sm.append('</urlset>')
     open(os.path.join(SITE, 'sitemap.xml'), 'w').write('\n'.join(sm))
 
