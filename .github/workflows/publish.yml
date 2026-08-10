@@ -16,11 +16,12 @@ jobs:
         with: { python-version: '3.11' }
 
       - name: 주제 수집 (키 있을 때만)
-        if: ${{ secrets.NAVER_CLIENT_ID != '' }}
         env:
           NAVER_CLIENT_ID: ${{ secrets.NAVER_CLIENT_ID }}
           NAVER_CLIENT_SECRET: ${{ secrets.NAVER_CLIENT_SECRET }}
-        run: python3 scripts/fetch_topics.py --out data/topics.json
+        run: |
+          if [ -z "$NAVER_CLIENT_ID" ]; then echo "네이버 키 미설정 — 건너뜀"; exit 0; fi
+          python3 scripts/fetch_topics.py --out data/topics.json
 
       - name: 사이트 빌드
         run: python3 scripts/build.py --sku data/sku-data.json --topics data/topics.json
@@ -38,12 +39,13 @@ jobs:
           git push
 
       - name: IndexNow 통보
-        if: ${{ secrets.INDEXNOW_KEY != '' }}
         env: { KEY: "${{ secrets.INDEXNOW_KEY }}" }
         run: |
           python3 - <<'PY'
           import os, json, re, urllib.request
-          key = os.environ['KEY']
+          key = os.environ.get('KEY') or ''
+          if not key:
+              print('INDEXNOW_KEY 미설정 — 건너뜀'); raise SystemExit(0)
           sm = open('docs/sitemap.xml').read()
           urls = re.findall(r'<loc>(.*?)</loc>', sm)
           host = urls[0].split('/')[2]
